@@ -8,9 +8,19 @@ from configparser import ConfigParser
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core import Settings
-from utils.functions import extract_json, generate_metadata, process_documents
+from utils.functions import generate_metadata, process_documents
 
-api_key='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'
+
+# UI to accept OpenAI API Key
+st.sidebar.header("🔐 OpenAI Configuration")
+openai_api_key = st.sidebar.text_input("Enter your OpenAI API Key", type="password")
+
+# Check if key is provided
+if not openai_api_key:
+    st.warning("Please enter your OpenAI API key in the sidebar to proceed.")
+    st.stop()
+    
+api_key=openai_api_key
 
 # Create necessary folders
 os.makedirs("data", exist_ok=True)
@@ -33,7 +43,7 @@ if uploaded_file:
 
         with st.spinner("Generating metadata schema..."):
             try:
-                metadata_json, raw_response = generate_metadata(document_info, user_queries)
+                metadata_json, raw_response = generate_metadata(document_info, user_queries, api_key)
                 st.success("Successfully generated metadata schema ")
                 st.json(metadata_json)
 

@@ -20,7 +20,7 @@ def extract_json(text):
             continue
     return json_objects
 
-def generate_metadata(document_info, user_queries):
+def generate_metadata(document_info, user_queries, api_key):
     prompt = (''' I am indexing a large dataset for better retrieval. I want to break the data into chunks and index the chunks of data and store metadata of each chunk for better and accurate retrieval.
 
 I will give you information about my dataset and list of probable questions that user may ask. It's not exact questions but just a set of examples. Analyse the data and type of probable questions and give me two lists of metadata that I should extract from each chunk of data for better retrieval.
@@ -52,7 +52,7 @@ Dataset information:''' + document_info +
         {"role": "system", "content": "You are an expert LLM Engineer and Consultant."},
         {"role": "user", "content": prompt}
     ]
-    client = openai.OpenAI(api_key='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')
+    client = openai.OpenAI(api_key=api_key)
     response = client.chat.completions.create(
         model="gpt-4",
         messages=main_prompt,
