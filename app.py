@@ -121,6 +121,7 @@ if st.button("🚀 Ingest into database"):
             if document.id_ in extracted_jsons:
                 metadata = extracted_jsons[document.id_]
                 # Encode the document text into a vector
+                st.text(document.text)
                 vector = encoder.encode(document.text)
                 # Create a point with the metadata and the encoded vector
                 point = PointStruct(
@@ -130,7 +131,7 @@ if st.button("🚀 Ingest into database"):
                 )
                 points.append(point)
             index += 1
-        print(f"Points: {points}")
+        st.text(points)
         # Batch upload points to the collection
         client.upsert(collection_name=collection_name, points=points)
         st.success(f"Successfully ingested {len(points)} documents into the Qdrant collection.")
