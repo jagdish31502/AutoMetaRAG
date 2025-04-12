@@ -141,7 +141,7 @@ def get_qdrant_collection(client, collection_name):
     # Create the collection again
     client.create_collection(collection_name=collection_name, vectors_config={"size": 384, "distance": "Cosine"})
     message = "new collection created"
-    return client,message
+    return message
 
 # Function to extract unique values per key
 def extract_unique_nested_values(json_data): 

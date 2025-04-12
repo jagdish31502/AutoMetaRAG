@@ -14,6 +14,9 @@ from qdrant_client.http import models
 from qdrant_client.http.models import PointStruct, Filter, FieldCondition, Range
 from utils.functions import generate_metadata, process_documents, get_qdrant_collection, extract_unique_nested_values, filter_metadata_by_query
 
+# Initialize session state
+if "extracted_jsons" not in st.session_state:
+    st.session_state.extracted_jsons = None
 
 # UI to accept OpenAI API Key
 st.subheader("🔐 OpenAI Configuration")
@@ -77,11 +80,21 @@ if json1_input and json2_input and st.button("🚀 Process Documents for Metadat
         documents = SimpleDirectoryReader("data", filename_as_id=True).load_data()
         with st.spinner("Processing documents to extract metadata..."):
             extracted_jsons = process_documents(documents, (json1_input, json2_input), api_key)
+            st.session_state.extracted_jsons = extracted_jsons
             with open('data.json', 'w') as f:
                 json.dump(extracted_jsons, f)
         st.success("✅ Metadata extracted successfully!")
     except Exception as e:
         st.error(f"Error during processing: {e}")
+
+# Show download button if data is ready
+if st.session_state.extracted_jsons:
+    st.download_button(
+        label="📥 Download extracted metadata",
+        data=json.dumps(st.session_state.extracted_jsons, indent=4),
+        file_name='data.json',
+        mime='application/json',
+    )
 
 # Ingest into qdrant
 st.subheader("📁 Ingest into database")
@@ -140,10 +153,10 @@ else:
     st.info("📂 Please upload JSON file to extract unique values.")
     
 # Filter by metadata
-st.subheader("🔍 Filter by Metadata")
+st.subheader("🔍 Filter by Unique values")
 user_query = st.text_area("💬 Enter your search query", height=70)
 # --- Submit Button ---
-if st.button("filter by metadata"):
+if st.button("filter by unique values"):
     try:
         result = filter_metadata_by_query(unique_values_per_key, user_query, api_key)
         st.success("✅ Filtered metadata based on the query:")
@@ -153,7 +166,6 @@ if st.button("filter by metadata"):
 else:
     st.info("📌 Please provide query to proceed.")
 
-st.subheader("🧩 RAG : Pass Metadata Filter + User Query to Qdrant Search")
 try:
     # Initialize the sentence transformer model
     encoder = SentenceTransformer("all-MiniLM-L6-v2")
@@ -165,24 +177,39 @@ try:
             )
         ]
     )
-
+    st.markdown("### Metadata Filter")
+    st.json(metadata_filter)
+    # print("!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+    st.subheader("🧩 RAG : Pass Metadata Filter + User Query to Qdrant Search")
     query_vector = encoder.encode(user_query).tolist()
+    # print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+    # metadata_filter_input= st.text_area("Enter Metadata Filter",  height=70)
+    # Add a button to trigger the search
+    # if st.button("🔍 Search with Metadata Filter"):
+    if metadata_filter:
+        # print(f"METADATA filter: {metadata_filter_input}")
+        # st.write("RAW input:", metadata_filter_input)
+        # print("############")
+        # st.write("✅ Received metadata input")
+        # 🧠 Hybrid Search using metadata + user query
+        # print("@@@@@@@@@@")
+        print(type(metadata_filter))
+        hits = client.search(
+            collection_name=collection_name,
+            query_vector=query_vector,
+            limit=3,
+            query_filter=metadata_filter
+        )
+        st.success("Search executed successfully!")
 
-    # 🧠 Hybrid Search using metadata + user query
-    hits = client.search(
-        collection_name=collection_name,
-        query_vector=query_vector,
-        limit=3,
-        query_filter=metadata_filter
-    )
-
-    st.subheader("🔍 Top Search Results")
-    for hit in hits:
-        st.markdown(f"**ID:** {hit.id}")
-        st.markdown(f"**Score:** {hit.score:.4f}")
-        st.markdown(f"**Title:** {hit.payload.get('section_title', 'N/A')}")
-        st.markdown(f"**Summary:** {hit.payload.get('section_summary', 'N/A')}")
-        st.markdown("---")
+        st.subheader("🔍 Top Search Results")
+        for hit in hits:
+            # st.json(hit.payload)
+            st.markdown(f"**ID:** {hit.id}")
+            st.markdown(f"**Score:** {hit.score:.4f}")
+            st.markdown(f"**Title:** {hit.payload.get('section_title', 'N/A')}")
+            st.markdown(f"**Summary:** {hit.payload.get('section_summary', 'N/A')}")
+            st.markdown("---")
     # Collect context from retrieved hits
     st.subheader("🤖 RAG - Passing Retrieved Data Chunks to LLM for Final Response")
     context_chunks = []
