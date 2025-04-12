@@ -130,7 +130,7 @@ if st.button("🚀 Ingest into database"):
                 )
                 points.append(point)
             index += 1
-
+        print(f"Points: {points}")
         # Batch upload points to the collection
         client.upsert(collection_name=collection_name, points=points)
         st.success(f"Successfully ingested {len(points)} documents into the Qdrant collection.")
