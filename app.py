@@ -34,7 +34,7 @@ st.markdown("Upload a `config.ini` to extract metadata")
 st.header("📄 Upload config.ini")
 uploaded_file = st.file_uploader("Upload config.ini", type="ini")
 
-if uploaded_file:
+if uploaded_file and st.button("get metadata schema"):
     config = ConfigParser()
     config.read_string(uploaded_file.read().decode("utf-8"))
 
