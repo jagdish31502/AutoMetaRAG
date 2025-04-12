@@ -121,6 +121,7 @@ if st.button("🚀 Ingest into database"):
             if document.id_ in extracted_jsons:
                 metadata = extracted_jsons[document.id_]
                 # Encode the document text into a vector
+                st.mardown("### Document text")
                 st.text(document.text)
                 vector = encoder.encode(document.text)
                 # Create a point with the metadata and the encoded vector
@@ -131,6 +132,7 @@ if st.button("🚀 Ingest into database"):
                 )
                 points.append(point)
             index += 1
+        st.markdown("### Points")
         st.text(points)
         # Batch upload points to the collection
         client.upsert(collection_name=collection_name, points=points)
