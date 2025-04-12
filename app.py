@@ -63,8 +63,10 @@ if uploaded_files:
             f.write(file.read())
     # Load files with LlamaIndex
     with st.spinner("Loading documents using LlamaIndex..."):
+        splitter = SentenceSplitter(chunk_size=1024,chunk_overlap=20)
         try:
-            documents = SimpleDirectoryReader("data", filename_as_id=True).load_data()
+            entire_docs = SimpleDirectoryReader("data", filename_as_id=True).load_data()
+            documents = splitter.get_nodes_from_documents(entire_docs)
             st.success(f"✅ documents are uploaded.")
 
         except Exception as e:
@@ -77,7 +79,6 @@ json2_input = st.text_area("Enter JSON Format for Chunk-Level Metadata",  height
 # When documents are loaded and JSON formats are provided
 if json1_input and json2_input and st.button("🚀 Process Documents for Metadata"):
     try:
-        documents = SimpleDirectoryReader("data", filename_as_id=True).load_data()
         with st.spinner("Processing documents to extract metadata..."):
             extracted_jsons = process_documents(documents, (json1_input, json2_input), api_key)
             st.session_state.extracted_jsons = extracted_jsons
