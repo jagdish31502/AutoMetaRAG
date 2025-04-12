@@ -76,6 +76,7 @@ def process_documents(documents, json_formats, openai_api_key):
     results = {}
     previous_file_name = None
     last_json1 = None
+    print(f"@@@@JSON Formats: {json_formats}")
 
     for doc in documents:
         if doc.metadata['file_name'] == previous_file_name:
@@ -107,7 +108,7 @@ def process_documents(documents, json_formats, openai_api_key):
 
             # json_pattern = r'\{.*?\}'
             json_pattern = r'\{[^{}]*\}'
-            extracted_json = re.findall(json_pattern, response )[0]
+            extracted_json = re.findall(json_pattern, response)[0]
             extracted_dict = json.loads(extracted_json)
 
             # Merge JSONs as required
@@ -131,4 +132,69 @@ def process_documents(documents, json_formats, openai_api_key):
         previous_file_name = doc.metadata['file_name']
 
     return results
+
+def get_qdrant_collection(client, collection_name):
+    # Check if collection exists
+    if collection_name in [collection.name for collection in client.get_collections().collections]:
+        client.delete_collection(collection_name=collection_name)
+
+    # Create the collection again
+    client.create_collection(collection_name=collection_name, vectors_config={"size": 384, "distance": "Cosine"})
+    message = "new collection created"
+    return client,message
+
+# Function to extract unique values per key
+def extract_unique_nested_values(json_data): 
+    unique_values = {}
+
+    # Iterate through each document
+    for document in json_data.values():
+        # Convert the stringified JSON data into a dictionary
+        nested_data = json.loads(document)
+
+        # Process each key-value pair in the nested JSON
+        for key, value in nested_data.items():
+            if key not in unique_values:
+                unique_values[key] = set()
+            unique_values[key].add(value)
+
+    # Convert sets back to lists for JSON serialization
+    return {key: list(values) for key, values in unique_values.items()}
+
+def filter_metadata_by_query(unique_values_json, user_query, openai_api_key):
+    client = openai.OpenAI(api_key=openai_api_key)
+
+    prompt = ''' You will be given a query and master data JSON. The query is to be used for performing hybrid search on a vector database.
+    Your job is to analyse the query and respond with key-value pairs that you can find out from the master data JSON. Don't focus on answering
+    the query. Just find out which key-value pairs match the master data.
+
+    For example: Master json is {'price' : ['0$-100$', '100$-500$', '500$-1000$', '1000$+'], 'product_category': ['clothes, accessories', 'mobiles, laptops', 'grocery, essentials']}
+
+    Query is "What are some good options for Mens black Tshirt"
+
+    Your response should be {'product_category':'clothes, accessories'}
+
+    Here is the master data json: ''' + json.dumps(unique_values_json) + '''User Query: ''' + user_query + '''Your response: '''
+
+    main_prompt = [
+        {"role": "system", "content": "You are an expert JSON extractor and data analyst."},
+        {"role": "user", "content": prompt}
+    ]
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=main_prompt,
+        temperature=0
+    )
+
+    try:
+        json_pattern = r'\{.*?\}'
+        extracted_json = re.findall(json_pattern, response.choices[0].message.content, re.DOTALL)[0]
+        relevant_entries = json.loads(extracted_json)
+        return relevant_entries
+
+    except json.JSONDecodeError:
+        return {"error": "❌ Failed to decode response from OpenAI"}
+
+
 

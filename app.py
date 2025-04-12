@@ -8,18 +8,16 @@ from configparser import ConfigParser
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core import Settings
-from utils.functions import generate_metadata, process_documents
+from sentence_transformers import SentenceTransformer
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
+from qdrant_client.http.models import PointStruct, Filter, FieldCondition, Range
+from utils.functions import generate_metadata, process_documents, get_qdrant_collection, extract_unique_nested_values, filter_metadata_by_query
 
 
 # UI to accept OpenAI API Key
-st.sidebar.header("🔐 OpenAI Configuration")
-openai_api_key = st.sidebar.text_input("Enter your OpenAI API Key", type="password")
-
-# Check if key is provided
-if not openai_api_key:
-    st.warning("Please enter your OpenAI API key in the sidebar to proceed.")
-    st.stop()
-    
+st.subheader("🔐 OpenAI Configuration")
+openai_api_key = st.text_input("Enter your OpenAI API Key", type="password")
 api_key=openai_api_key
 
 # Create necessary folders
@@ -27,7 +25,7 @@ os.makedirs("data", exist_ok=True)
 
 # Streamlit UI
 # st.title("🔍 Metadata & Data Uploader with LlamaIndex")
-st.markdown("Upload a `config.ini` to extract metadata, and upload any `.txt`, `.md`, `.pdf`, etc. files to load into LlamaIndex.")
+st.markdown("Upload a `config.ini` to extract metadata")
 
 # --- Upload config.ini ---
 st.header("📄 Upload config.ini")
@@ -54,9 +52,7 @@ if uploaded_file:
 
 # --- Upload Dataset Files ---
 st.header("📂 Upload Dataset Files")
-
 uploaded_files = st.file_uploader("Upload data files (e.g., .txt, .docx, .pdf)", accept_multiple_files=True)
-
 if uploaded_files:
     for file in uploaded_files:
         file_path = os.path.join("data", file.name)
@@ -73,25 +69,156 @@ if uploaded_files:
 
 # --- JSON Format Input ---
 st.header("🧩 Define JSON Format for Metadata Extraction")
-
-# default_json1 = '{"document_type": "", "document_title": "", "document_creation_date": "", "department": ""}'
-# default_json2 = '{"section_title": "", "section_keywords": "", "section_summary": ""}'
-
 json1_input = st.text_area("Enter JSON Format for File-Level Metadata",  height=70)
 json2_input = st.text_area("Enter JSON Format for Chunk-Level Metadata",  height=70)
-
 # When documents are loaded and JSON formats are provided
 if json1_input and json2_input and st.button("🚀 Process Documents for Metadata"):
     try:
         documents = SimpleDirectoryReader("data", filename_as_id=True).load_data()
         with st.spinner("Processing documents to extract metadata..."):
             extracted_jsons = process_documents(documents, (json1_input, json2_input), api_key)
+            with open('data.json', 'w') as f:
+                json.dump(extracted_jsons, f)
         st.success("✅ Metadata extracted successfully!")
-        # for doc_id, metadata in extracted_jsons.items():
-        #     st.subheader(f"📄 Document ID: {doc_id}")
-        #     st.json(json.loads(metadata))
-
     except Exception as e:
         st.error(f"Error during processing: {e}")
 
+# Ingest into qdrant
+st.subheader("📁 Ingest into database")
+QDRANT_URL  = st.text_input("Qdrant URL")
+ACCESS_TOKEN  = st.text_input("API Key", type="password")
+collection_name = st.text_input("Collection Name", value="AutoRAG")
+# Initialize the Qdrant client
+client = QdrantClient(url=QDRANT_URL, api_key=ACCESS_TOKEN)
+if st.button("🚀 Ingest into database"):
+    try:
+        messgae = get_qdrant_collection(client, collection_name)
+        if messgae:
+            st.success(messgae)
+        # Load metadata
+        with open('data.json', 'r') as f:
+                extracted_jsons= json.load(f)
+        # Initialize the sentence transformer model
+        encoder = SentenceTransformer("all-MiniLM-L6-v2")
+        # Prepare points to be uploaded
+        points = []
+        index = 0
+        for document in documents:
+            if document.id_ in extracted_jsons:
+                metadata = extracted_jsons[document.id_]
+                # Encode the document text into a vector
+                vector = encoder.encode(document.text)
+                # Create a point with the metadata and the encoded vector
+                point = PointStruct(
+                    id=index,
+                    payload=json.loads(metadata),
+                    vector=vector  # Convert numpy array to list
+                )
+                points.append(point)
+            index += 1
+
+        # Batch upload points to the collection
+        client.upsert(collection_name=collection_name, points=points)
+        st.success(f"Successfully ingested {len(points)} documents into the Qdrant collection.")
+    except Exception as e:
+        st.error(f"❌ Upload failed: {e}")
+
+#Extract Unique values
+st.subheader("🔍 Extract Unique Values from JSON")
+# File uploader for JSON file
+uploaded_file = st.file_uploader("Upload `data.json`", type=["json"])
+# Display results after file is uploaded
+if uploaded_file:
+    try:
+        data = json.load(uploaded_file)
+        unique_values_per_key = extract_unique_nested_values(data)
+        st.success("✅ Unique values extracted successfully!")
+        st.json(unique_values_per_key)
+    except Exception as e:
+        st.error(f"❌ Error processing file: {e}")
+else:
+    st.info("📂 Please upload JSON file to extract unique values.")
+    
+# Filter by metadata
+st.subheader("🔍 Filter by Metadata")
+user_query = st.text_area("💬 Enter your search query", height=70)
+# --- Submit Button ---
+if st.button("filter by metadata"):
+    try:
+        result = filter_metadata_by_query(unique_values_per_key, user_query, api_key)
+        st.success("✅ Filtered metadata based on the query:")
+        st.json(result)
+    except Exception as e:
+        st.error(f"❌ Error: {e}")
+else:
+    st.info("📌 Please provide query to proceed.")
+
+st.subheader("🧩 RAG : Pass Metadata Filter + User Query to Qdrant Search")
+try:
+    # Initialize the sentence transformer model
+    encoder = SentenceTransformer("all-MiniLM-L6-v2")
+    metadata_filter = Filter(
+        should=[
+            FieldCondition(
+                key=list(result.keys())[0],
+                match={"value": list(result.values())[0]}
+            )
+        ]
+    )
+
+    query_vector = encoder.encode(user_query).tolist()
+
+    # 🧠 Hybrid Search using metadata + user query
+    hits = client.search(
+        collection_name=collection_name,
+        query_vector=query_vector,
+        limit=3,
+        query_filter=metadata_filter
+    )
+
+    st.subheader("🔍 Top Search Results")
+    for hit in hits:
+        st.markdown(f"**ID:** {hit.id}")
+        st.markdown(f"**Score:** {hit.score:.4f}")
+        st.markdown(f"**Title:** {hit.payload.get('section_title', 'N/A')}")
+        st.markdown(f"**Summary:** {hit.payload.get('section_summary', 'N/A')}")
+        st.markdown("---")
+    # Collect context from retrieved hits
+    st.subheader("🤖 RAG - Passing Retrieved Data Chunks to LLM for Final Response")
+    context_chunks = []
+    for hit in hits:
+        section_title = hit.payload.get("section_title", "")
+        section_summary = hit.payload.get("section_summary", "")
+        context_chunks.append(f"Title: {section_title}\nSummary: {section_summary}")
+
+    context = "\n\n".join(context_chunks)
+
+    # Construct the prompt
+    prompt = f'''Based on the provided context information from the dataset, generate a comprehensive answer for the user query.
+    Context: {context}
+    User Query: {user_query}'''
+
+    main_prompt = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": prompt}
+    ]
+
+    try:
+        # Make the request to OpenAI
+        client = openai.OpenAI(api_key=api_key)  # assuming key is collected earlier
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=main_prompt,
+            temperature=0
+        )
+
+        st.subheader("🧠 Final LLM Response")
+        st.markdown(response.choices[0].message.content)
+
+    except Exception as e:
+        st.error(f"❌ Error calling OpenAI: {e}")
+
+
+except Exception as e:
+    st.error(f"❌ Error while searching Qdrant: {e}")
 
