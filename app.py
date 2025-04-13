@@ -45,13 +45,19 @@ if uploaded_file and st.button("get metadata schema"):
         with st.spinner("Generating metadata schema..."):
             try:
                 metadata_json, raw_response = generate_metadata(document_info, user_queries, api_key)
+                st.session_state["metadata_schema"] = metadata_json  # ✅ Store in session
                 st.success("Successfully generated metadata schema ")
-                st.json(metadata_json)
+                # st.json(metadata_json)
 
             except Exception as e:
                 st.error(f"An error occurred: {e}")
     else:
         st.error("Missing [Metadata] section in config.ini")
+
+# ✅ Persisted display of metadata schema
+if "metadata_schema" in st.session_state:
+    st.markdown("### 📦 Metadata Schema")
+    st.json(st.session_state["metadata_schema"])
 
 # --- Upload Dataset Files ---
 st.header("📂 Upload Dataset Files")
@@ -102,27 +108,29 @@ st.subheader("📁 Ingest into database")
 QDRANT_URL  = st.text_input("Qdrant URL")
 ACCESS_TOKEN  = st.text_input("API Key", type="password")
 collection_name = st.text_input("Collection Name", value="AutoRAG")
+uploaded_file = st.file_uploader("Upload `data.json`", type=["json"])
 # Initialize the Qdrant client
 client = QdrantClient(url=QDRANT_URL, api_key=ACCESS_TOKEN)
-if st.button("🚀 Ingest into database"):
+if uploaded_file and st.button("🚀 Ingest into database"):
     try:
         messgae = get_qdrant_collection(client, collection_name)
         if messgae:
             st.success(messgae)
-        # Load metadata
-        with open('data.json', 'r') as f:
-                extracted_jsons= json.load(f)
+
+        extracted_jsons= json.load(uploaded_file)
+        st.session_state["extracted_jsons"] = extracted_jsons
         # Initialize the sentence transformer model
         encoder = SentenceTransformer("all-MiniLM-L6-v2")
         # Prepare points to be uploaded
         points = []
         index = 0
+        unique_id_to_metadata = {
+            json.loads(value)["unique_id"]: value for value in extracted_jsons.values()
+        }
         for document in documents:
-            if document.id_ in extracted_jsons:
-                metadata = extracted_jsons[document.id_]
-                # Encode the document text into a vector
-                st.mardown("### Document text")
-                st.text(document.text)
+            file_name = document.metadata['file_name']
+            if file_name in unique_id_to_metadata:
+                metadata = unique_id_to_metadata[file_name]
                 vector = encoder.encode(document.text)
                 # Create a point with the metadata and the encoded vector
                 point = PointStruct(
@@ -132,9 +140,6 @@ if st.button("🚀 Ingest into database"):
                 )
                 points.append(point)
             index += 1
-        st.markdown("### Points")
-        st.text(points)
-        # Batch upload points to the collection
         client.upsert(collection_name=collection_name, points=points)
         st.success(f"Successfully ingested {len(points)} documents into the Qdrant collection.")
     except Exception as e:
@@ -142,26 +147,30 @@ if st.button("🚀 Ingest into database"):
 
 #Extract Unique values
 st.subheader("🔍 Extract Unique Values from JSON")
-# File uploader for JSON file
-uploaded_file = st.file_uploader("Upload `data.json`", type=["json"])
 # Display results after file is uploaded
-if uploaded_file:
+if st.button("Extract unique values"):
     try:
-        data = json.load(uploaded_file)
+        data = st.session_state.get("extracted_jsons", {})
         unique_values_per_key = extract_unique_nested_values(data)
+        st.session_state["unique_values_per_key"] = unique_values_per_key
         st.success("✅ Unique values extracted successfully!")
-        st.json(unique_values_per_key)
+        # st.json(unique_values_per_key)
     except Exception as e:
         st.error(f"❌ Error processing file: {e}")
 else:
     st.info("📂 Please upload JSON file to extract unique values.")
-    
+
+# ✅ Persisted display of metadata schema
+if "unique_values_per_key" in st.session_state:
+    st.json(st.session_state["unique_values_per_key"])
+
 # Filter by metadata
 st.subheader("🔍 Filter by Unique values")
 user_query = st.text_area("💬 Enter your search query", height=70)
 # --- Submit Button ---
 if st.button("filter by unique values"):
     try:
+        unique_values_per_key = st.session_state.get("extracted_jsons", {})
         result = filter_metadata_by_query(unique_values_per_key, user_query, api_key)
         st.success("✅ Filtered metadata based on the query:")
         st.json(result)
@@ -183,21 +192,9 @@ try:
     )
     st.markdown("### Metadata Filter")
     st.json(metadata_filter)
-    # print("!!!!!!!!!!!!!!!!!!!!!!!!!!!")
     st.subheader("🧩 RAG : Pass Metadata Filter + User Query to Qdrant Search")
     query_vector = encoder.encode(user_query).tolist()
-    # print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
-    # metadata_filter_input= st.text_area("Enter Metadata Filter",  height=70)
-    # Add a button to trigger the search
-    # if st.button("🔍 Search with Metadata Filter"):
     if metadata_filter:
-        # print(f"METADATA filter: {metadata_filter_input}")
-        # st.write("RAW input:", metadata_filter_input)
-        # print("############")
-        # st.write("✅ Received metadata input")
-        # 🧠 Hybrid Search using metadata + user query
-        # print("@@@@@@@@@@")
-        print(type(metadata_filter))
         hits = client.search(
             collection_name=collection_name,
             query_vector=query_vector,
@@ -208,21 +205,21 @@ try:
 
         st.subheader("🔍 Top Search Results")
         for hit in hits:
-            # st.json(hit.payload)
-            st.markdown(f"**ID:** {hit.id}")
-            st.markdown(f"**Score:** {hit.score:.4f}")
-            st.markdown(f"**Title:** {hit.payload.get('section_title', 'N/A')}")
-            st.markdown(f"**Summary:** {hit.payload.get('section_summary', 'N/A')}")
+            st.json(hit.payload)
+            # st.markdown(f"**ID:** {hit.id}")
+            # st.markdown(f"**Score:** {hit.score:.4f}")
+            # st.markdown(f"**Title:** {hit.payload.get('section_title', 'N/A')}")
+            # st.markdown(f"**Summary:** {hit.payload.get('section_summary', 'N/A')}")
             st.markdown("---")
     # Collect context from retrieved hits
     st.subheader("🤖 RAG - Passing Retrieved Data Chunks to LLM for Final Response")
     context_chunks = []
     for hit in hits:
-        section_title = hit.payload.get("section_title", "")
-        section_summary = hit.payload.get("section_summary", "")
-        context_chunks.append(f"Title: {section_title}\nSummary: {section_summary}")
+        context_chunks.append(hit.payload)
 
-    context = "\n\n".join(context_chunks)
+    context = "\n\n".join([json.dumps(chunk, indent=2) for chunk in context_chunks])
+    # st.markdown("###Context")
+    # st.text(context)
 
     # Construct the prompt
     prompt = f'''Based on the provided context information from the dataset, generate a comprehensive answer for the user query.

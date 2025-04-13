@@ -87,7 +87,7 @@ def process_documents(documents, json_formats, openai_api_key):
             json_to_extract = f"{json_formats[0]}\n\n{json_formats[1]}"
         # print(f"############ Text: {doc.text}")
         # Prepare the OpenAI prompt
-        prompt = f"Evaluate the text data and extract required json parameters to create metadata. Understand the overall context of the text and fill up the json metadata strictly as per the structures defined. Respond with Json Only. Nothing extra. Generate one single JSON output, If I give you two json structures, combine them into one JSON JSON Structure: {json_formats}\n\nText:\n{doc.text}"
+        prompt = f"Evaluate the text data and extract required json parameters to create metadata. Understand the overall context of the text and fill up the json metadata strictly as per the structures defined. Respond with Json Only. Nothing extra. Generate one single JSON output, If I give you two json structures, combine them into one JSON Structure: {json_to_extract}\n\nText:\n{doc.text}"
         main_prompt = [
             {"role": "system", "content": "You are an expert JSON extractor and data analyst."},
             {"role": "user", "content": prompt}
@@ -110,6 +110,8 @@ def process_documents(documents, json_formats, openai_api_key):
             json_pattern = r'\{[^{}]*\}'
             extracted_json = re.findall(json_pattern, response)[0]
             extracted_dict = json.loads(extracted_json)
+            # Add unique_id field from the file name
+            extracted_dict["unique_id"] = doc.metadata['file_name']
 
             # Merge JSONs as required
             if doc.metadata['file_name'] == previous_file_name and last_json1 is not None:
