@@ -17,6 +17,9 @@ from utils.functions import generate_metadata, process_documents, get_qdrant_col
 # Initialize session state
 if "extracted_jsons" not in st.session_state:
     st.session_state.extracted_jsons = None
+    
+if "documents" not in st.session_state:
+    st.session_state.documents = None
 
 # UI to accept OpenAI API Key
 st.subheader("🔐 OpenAI Configuration")
@@ -62,37 +65,29 @@ if "metadata_schema" in st.session_state:
 # --- Upload Dataset Files ---
 st.header("📂 Upload Dataset Files")
 uploaded_files = st.file_uploader("Upload data files (e.g., .txt, .docx, .pdf)", accept_multiple_files=True)
-if uploaded_files:
+json1_input = st.text_area("Enter JSON Format for File-Level Metadata",  height=70)
+json2_input = st.text_area("Enter JSON Format for Chunk-Level Metadata",  height=70)
+if uploaded_files and  json1_input and json2_input and st.button("🚀 Process Documents for Metadata"):
     for file in uploaded_files:
         file_path = os.path.join("data", file.name)
         with open(file_path, "wb") as f:
             f.write(file.read())
-    # Load files with LlamaIndex
-    with st.spinner("Loading documents using LlamaIndex..."):
-        splitter = SentenceSplitter(chunk_size=1024,chunk_overlap=20)
+    splitter = SentenceSplitter(chunk_size=1024,chunk_overlap=20)
+    with st.spinner("Processing Documents..."):
         try:
             entire_docs = SimpleDirectoryReader("data", filename_as_id=True).load_data()
             documents = splitter.get_nodes_from_documents(entire_docs)
-            st.success(f"✅ documents are uploaded.")
-
-        except Exception as e:
-            st.error(f"❌ Error loading documents: {e}")
-
-# --- JSON Format Input ---
-st.header("🧩 Define JSON Format for Metadata Extraction")
-json1_input = st.text_area("Enter JSON Format for File-Level Metadata",  height=70)
-json2_input = st.text_area("Enter JSON Format for Chunk-Level Metadata",  height=70)
-# When documents are loaded and JSON formats are provided
-if json1_input and json2_input and st.button("🚀 Process Documents for Metadata"):
-    try:
-        with st.spinner("Processing documents to extract metadata..."):
-            extracted_jsons = process_documents(documents, (json1_input, json2_input), api_key)
+            st.session_state.documents = documents
+            # st.json(documents)
+            # st.success(f"✅ documents are uploaded.")
+            extracted_jsons = process_documents(documents, json1_input, json2_input, api_key)
             st.session_state.extracted_jsons = extracted_jsons
             with open('data.json', 'w') as f:
                 json.dump(extracted_jsons, f)
-        st.success("✅ Metadata extracted successfully!")
-    except Exception as e:
-        st.error(f"Error during processing: {e}")
+            st.success("✅ Metadata extracted successfully!")
+
+        except Exception as e:
+            st.error(f"❌ Error loading documents: {e}")
 
 # Show download button if data is ready
 if st.session_state.extracted_jsons:
@@ -118,28 +113,33 @@ if uploaded_file and st.button("🚀 Ingest into database"):
             st.success(messgae)
 
         extracted_jsons= json.load(uploaded_file)
+        # st.markdown("### extracted json: ")
+        # st.json(extracted_jsons)
         st.session_state["extracted_jsons"] = extracted_jsons
         # Initialize the sentence transformer model
         encoder = SentenceTransformer("all-MiniLM-L6-v2")
         # Prepare points to be uploaded
         points = []
         index = 0
-        unique_id_to_metadata = {
-            json.loads(value)["unique_id"]: value for value in extracted_jsons.values()
-        }
+        documents = st.session_state.get("documents", {})
         for document in documents:
-            file_name = document.metadata['file_name']
-            if file_name in unique_id_to_metadata:
-                metadata = unique_id_to_metadata[file_name]
+            if document.id_ in extracted_jsons:
+                metadata = extracted_jsons[document.id_]
+                metadata = json.loads(metadata)
+                data_to_load = {**metadata, "text_data": str(document.text)}
+                # Encode the document text into a vector
                 vector = encoder.encode(document.text)
-                # Create a point with the metadata and the encoded vector
+                #Create a point with the metadata and the encoded vector
                 point = PointStruct(
                     id=index,
-                    payload=json.loads(metadata),
+                    payload=data_to_load,
                     vector=vector  # Convert numpy array to list
                 )
                 points.append(point)
+
             index += 1
+
+        # Batch upload points to the collection
         client.upsert(collection_name=collection_name, points=points)
         st.success(f"Successfully ingested {len(points)} documents into the Qdrant collection.")
     except Exception as e:
@@ -192,32 +192,20 @@ try:
     )
     st.markdown("### Metadata Filter")
     st.json(metadata_filter)
-    st.subheader("🧩 RAG : Pass Metadata Filter + User Query to Qdrant Search")
     query_vector = encoder.encode(user_query).tolist()
     if metadata_filter:
         hits = client.search(
             collection_name=collection_name,
             query_vector=query_vector,
-            limit=3,
+            limit=5,
             query_filter=metadata_filter
         )
         st.success("Search executed successfully!")
 
-        st.subheader("🔍 Top Search Results")
-        for hit in hits:
-            st.json(hit.payload)
-            # st.markdown(f"**ID:** {hit.id}")
-            # st.markdown(f"**Score:** {hit.score:.4f}")
-            # st.markdown(f"**Title:** {hit.payload.get('section_title', 'N/A')}")
-            # st.markdown(f"**Summary:** {hit.payload.get('section_summary', 'N/A')}")
-            st.markdown("---")
     # Collect context from retrieved hits
     st.subheader("🤖 RAG - Passing Retrieved Data Chunks to LLM for Final Response")
-    context_chunks = []
-    for hit in hits:
-        context_chunks.append(hit.payload)
 
-    context = "\n\n".join([json.dumps(chunk, indent=2) for chunk in context_chunks])
+    context = [hit.payload['text_data'] for hit in hits]
     # st.markdown("###Context")
     # st.text(context)
 
